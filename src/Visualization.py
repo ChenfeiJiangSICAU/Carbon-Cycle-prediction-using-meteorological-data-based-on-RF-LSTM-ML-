@@ -5,7 +5,7 @@ from Model import y_pred
 
 
 plt.show()
-#%%
+
 import matplotlib.dates as mdates
 
 plt.figure(figsize=(16,4))
@@ -13,7 +13,7 @@ plt.figure(figsize=(16,4))
 plt.plot(df.loc[test_idx, "valid_time"], y_test, label="True")
 plt.plot(df.loc[test_idx, "valid_time"], y_pred, label="Pred")
 
-# 设置主刻度每 1 天显示一次
+
 plt.gca().xaxis.set_major_locator(mdates.DayLocator(interval=1))
 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
 
