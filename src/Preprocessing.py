@@ -2,8 +2,7 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 
-# ds: 你的多时刻 Dataset（concat 后）
-# ----------------------------------
+
 import glob
 files = glob.glob("../Data/*.nc")
 valid_files = []
@@ -25,7 +24,7 @@ ds = xr.open_mfdataset(
     valid_files,
     combine="by_coords",
     parallel=True,
-    chunks="auto" #读取是否分块
+    chunks="auto" 
 )
 
 ds_city = ds.sel(
@@ -43,28 +42,26 @@ columns_to_drop = ['number','ciwc','cswc','cc','clwc']
 df.drop(columns_to_drop, axis=1, inplace=True)
 
 
-# 时间特征（关键）
+# Time feature
 df["hour"] = df["valid_time"].dt.hour
 df["doy"]  = df["valid_time"].dt.dayofyear
 
-# 周期编码（避免离散问题）
+
 df["hour_sin"] = np.sin(2*np.pi*df["hour"]/24)
 df["hour_cos"] = np.cos(2*np.pi*df["hour"]/24)
 
 df["doy_sin"]  = np.sin(2*np.pi*df["doy"]/365)
 df["doy_cos"]  = np.cos(2*np.pi*df["doy"]/365)
 
-# 风速
+
 df["wind_speed"] = np.sqrt(df["u"]**2 + df["v"]**2)
 
 
-# 温度（假设单位 K → 转 °C）
+
 T = df["t"] - 273.15
 RH = df["r"] / 100.0  # 归一化
 
-# -------------------------
-# GPP（光合作用）
-# -------------------------
+
 Topt = 25
 sigma = 10
 
@@ -77,14 +74,9 @@ GPP = (
     * RH
 )
 
-# -------------------------
-# Reco（呼吸）
-# -------------------------
+
 Reco = 2 * np.exp(0.08 * T)
 
-# -------------------------
-# 空间异质性（避免过拟合公式）
-# -------------------------
 lat_factor = 1 - np.abs(df["latitude"]) / 90
 GPP  *= lat_factor
 Reco *= (1 + 0.3 * (1 - lat_factor))
@@ -94,12 +86,13 @@ Reco *= (1 + 0.3 * (1 - lat_factor))
 # -------------------------
 NEE = Reco - GPP
 
-# 加噪声（关键）
+
 NEE += np.random.normal(0, 0.5, size=len(NEE))
 
 df["NEE_sim"] = NEE
 
-
+#NOTE:Here we create the labels to simulate real situations which enables priodicity to be better exxpressed, in real case you should replace this part with true data labels.
+ 
 df = df.sort_values("valid_time")
 
 for lag in [1, 2]:
