@@ -1,6 +1,11 @@
 import xarray as xr
+import numpy as np
+import pandas as pd
+
+# ds: 你的多时刻 Dataset（concat 后）
+# ----------------------------------
 import glob
-files = glob.glob("your file path")
+files = glob.glob("../Data/*.nc")
 valid_files = []
 
 #Check files one by one
@@ -14,69 +19,94 @@ for f in files:
 
 print(f"Valid: {len(valid_files)}")
 
-#Read_Combine_Select
-import xarray as xr
+#Read_Combine_Select city
 
 ds = xr.open_mfdataset(
     valid_files,
     combine="by_coords",
-    parallel=False,
-    chunks=None
+    parallel=True,
+    chunks="auto" #读取是否分块
 )
 
 ds_city = ds.sel(
     latitude=30.0,
     longitude=103.0,
-    method="nearest"
+    method="nearest",
 )
 
 #Select Pressure Layer
-levels = [1000, 850, 500]
-
+levels = [1000]
 ds_sel = ds_city.sel(pressure_level=levels)
-
-
-#Turn to Dataframe
-#Note: Reset index here is used to turn '(valid_time, pressure_level)' these two indexes into normal columns in df,preparing for the following Pivot conversion
 df = ds_sel.to_dataframe().reset_index()
 
-#Data structure conversion,Pivot
-df_wide = df.pivot_table(
-    index="valid_time",
-    columns="pressure_level",
-    values=["t", "r", "u", "v"]
+columns_to_drop = ['number','ciwc','cswc','cc','clwc']
+df.drop(columns_to_drop, axis=1, inplace=True)
+
+
+# 时间特征（关键）
+df["hour"] = df["valid_time"].dt.hour
+df["doy"]  = df["valid_time"].dt.dayofyear
+
+# 周期编码（避免离散问题）
+df["hour_sin"] = np.sin(2*np.pi*df["hour"]/24)
+df["hour_cos"] = np.cos(2*np.pi*df["hour"]/24)
+
+df["doy_sin"]  = np.sin(2*np.pi*df["doy"]/365)
+df["doy_cos"]  = np.cos(2*np.pi*df["doy"]/365)
+
+# 风速
+df["wind_speed"] = np.sqrt(df["u"]**2 + df["v"]**2)
+
+
+# 温度（假设单位 K → 转 °C）
+T = df["t"] - 273.15
+RH = df["r"] / 100.0  # 归一化
+
+# -------------------------
+# GPP（光合作用）
+# -------------------------
+Topt = 25
+sigma = 10
+
+light = np.maximum(0, np.sin(2*np.pi*df["hour"]/24))
+
+GPP = (
+    10
+    * light
+    * np.exp(-((T - Topt)/sigma)**2)
+    * RH
 )
 
-#Column index flattening
+# -------------------------
+# Reco（呼吸）
+# -------------------------
+Reco = 2 * np.exp(0.08 * T)
 
-df_wide.columns = [
-    f"{var}_{int(level)}"
-    for var, level in df_wide.columns
-]
+# -------------------------
+# 空间异质性（避免过拟合公式）
+# -------------------------
+lat_factor = 1 - np.abs(df["latitude"]) / 90
+GPP  *= lat_factor
+Reco *= (1 + 0.3 * (1 - lat_factor))
 
-#Reset index
-df_wide = df_wide.reset_index()
+# -------------------------
+# NEE
+# -------------------------
+NEE = Reco - GPP
 
-#Make labels {delete}
-import numpy as np
+# 加噪声（关键）
+NEE += np.random.normal(0, 0.5, size=len(NEE))
 
-df_wide["hour"] = df_wide["valid_time"].dt.hour
+df["NEE_sim"] = NEE
 
-#Note: Here we created artificial data labels to fill in the blanks. In actual engineering, you need to replace these with your own data labels
-df_wide["Y"] = (
-    0.3 * df_wide["t_850"]
 
-    -0.2 * df_wide["r_850"]
+df = df.sort_values("valid_time")
 
-    +0.05 * (df_wide["u_850"]**2 + df_wide["v_850"]**2)**0.5
+for lag in [1, 2]:
+    df[f"t_lag{lag}"]  = df["t"].shift(lag)
+    df[f"r_lag{lag}"]  = df["r"].shift(lag)
+    df[f"wind_lag{lag}"] = df["wind_speed"].shift(lag)
 
-    +3 * np.maximum(0, np.sin(2*np.pi*df_wide["hour"]/24))
+df = df.dropna()
 
-    +2 * np.sin(2*np.pi*df_wide["valid_time"].dt.dayofyear/365)
-
-    + np.random.normal(0, 0.5, len(df_wide))
-)
-
-#Save
-df_wide.to_parquet("202305.parquet")
-print('Successfully Saved')
+print('Preprocess successfully done')
